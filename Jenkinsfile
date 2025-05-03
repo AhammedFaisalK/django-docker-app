@@ -4,13 +4,13 @@ pipeline {
     stages {
         stage('Clone Repo') {
             steps {
-                git 'https://github.com/your-username/django-docker-app.git'
+                git 'https://github.com/AhammedFaisalK/docker-django-demo.git'
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                sh 'docker build -t yourusername/django-docker-app .'
+                sh 'docker build -t ahammedfaisal/django-docker-app .'
             }
         }
 
@@ -18,8 +18,8 @@ pipeline {
             steps {
                 withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                     sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
-                    sh 'docker tag yourusername/django-docker-app yourusername/django-docker-app:latest'
-                    sh 'docker push yourusername/django-docker-app:latest'
+                    sh 'docker tag ahammedfaisal/django-docker-app ahammedfaisal/django-docker-app:latest'
+                    sh 'docker push ahammedfaisal/django-docker-app:latest'
                 }
             }
         }
