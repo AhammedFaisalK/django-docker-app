@@ -4,7 +4,7 @@ pipeline {
     stages {
         stage('Clone Repo') {
             steps {
-                git 'https://github.com/AhammedFaisalK/docker-django-demo.git'
+                git 'https://github.com/AhammedFaisalK/django-docker-app.git'
             }
         }
 
