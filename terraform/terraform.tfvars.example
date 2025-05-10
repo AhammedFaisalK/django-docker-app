@@ -1,0 +1,5 @@
+fly_api_token    = "your-fly-api-token"
+fly_org          = "your-org-name"
+app_name         = "django-docker-app"
+fly_region       = "sjc"
+django_secret_key = "your-secure-django-secret-key"

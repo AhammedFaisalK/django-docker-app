@@ -1,0 +1,20 @@
+---
+# Fly.io Configuration
+fly_api_token: "{{ lookup('env', 'FLY_API_TOKEN') }}"
+fly_org: "your-org-name"
+app_name: "django-docker-app"
+fly_region: "sjc"
+
+# Git Repository Information
+git_repo_url: "https://github.com/AhammedFaisalK/django-docker-app.git"
+git_branch: "main"
+
+# Docker Image Information
+docker_image: "ahammedfaisal/django-docker-app"
+docker_tag: "latest"
+
+# Django Configuration
+django_secret_key: "{{ lookup('env', 'DJANGO_SECRET_KEY') }}"
+django_admin_user: "admin"
+django_admin_email: "admin@example.com"
+django_admin_password: "{{ lookup('env', 'DJANGO_ADMIN_PASSWORD') }}"

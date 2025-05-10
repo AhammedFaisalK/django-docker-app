@@ -1,0 +1,88 @@
+---
+- name: Deploy Django application to Fly.io
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - vars/deploy_vars.yml
+
+  tasks:
+    - name: Install Fly.io CLI
+      shell: curl -L https://fly.io/install.sh | sh
+      args:
+        creates: ~/.fly/bin/flyctl
+      register: install_flyctl
+      changed_when: install_flyctl.rc == 0
+
+    - name: Add Fly.io CLI to PATH
+      ansible.builtin.lineinfile:
+        path: ~/.bashrc
+        line: "export PATH=$HOME/.fly/bin:$PATH"
+        state: present
+        create: yes
+      when: install_flyctl.changed
+
+    - name: Authenticate with Fly.io
+      shell: "~/.fly/bin/flyctl auth token {{ fly_api_token }}"
+      no_log: true
+
+    - name: Clone Git repository
+      git:
+        repo: "{{ git_repo_url }}"
+        dest: "{{ playbook_dir }}/{{ app_name }}"
+        version: "{{ git_branch }}"
+
+    - name: Update fly.toml with correct app name
+      ansible.builtin.template:
+        src: templates/fly.toml.j2
+        dest: "{{ playbook_dir }}/{{ app_name }}/fly.toml"
+
+    - name: Update Django settings for production
+      ansible.builtin.template:
+        src: templates/settings.py.j2
+        dest: "{{ playbook_dir }}/{{ app_name }}/src/app/settings.py"
+
+    - name: Initialize Terraform
+      terraform:
+        project_path: "{{ playbook_dir }}/terraform"
+        state: initialized
+
+    - name: Create terraform.tfvars file
+      ansible.builtin.template:
+        src: templates/terraform.tfvars.j2
+        dest: "{{ playbook_dir }}/terraform/terraform.tfvars"
+      no_log: true
+
+    - name: Apply Terraform configuration
+      terraform:
+        project_path: "{{ playbook_dir }}/terraform"
+        state: present
+      register: terraform_output
+
+    - name: Display Terraform outputs
+      debug:
+        var: terraform_output.outputs
+
+    - name: Build and push Docker image
+      shell: |
+        cd {{ playbook_dir }}/{{ app_name }}
+        docker build -t {{ docker_image }}:{{ docker_tag }} .
+        docker push {{ docker_image }}:{{ docker_tag }}
+
+    - name: Deploy to Fly.io
+      shell: |
+        cd {{ playbook_dir }}/{{ app_name }}
+        ~/.fly/bin/flyctl deploy --image {{ docker_image }}:{{ docker_tag }} --app {{ app_name }}
+
+    - name: Run migrations
+      shell: |
+        ~/.fly/bin/flyctl ssh console --app {{ app_name }} -C "python manage.py migrate"
+
+    - name: Create superuser if needed
+      shell: |
+        ~/.fly/bin/flyctl ssh console --app {{ app_name }} -C "python manage.py createsuperuser --noinput --username {{ django_admin_user }} --email {{ django_admin_email }}"
+      environment:
+        DJANGO_SUPERUSER_PASSWORD: "{{ django_admin_password }}"
+      no_log: true
+      ignore_errors: yes
