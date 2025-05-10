@@ -5,6 +5,7 @@ pipeline {
         FLY_API_TOKEN = credentials('fly-api-token')
         DJANGO_SECRET_KEY = credentials('django-secret-key')
         DJANGO_ADMIN_PASSWORD = credentials('django-admin-password')
+        PATH = "$HOME/.local/bin:$PATH"
     }
 
     stages {
@@ -32,16 +33,24 @@ pipeline {
         
         stage('Install Ansible') {
             steps {
-                sh 'pip install --user ansible'
+                sh '''
+                    pip install --user ansible
+                    export PATH=$HOME/.local/bin:$PATH
+                    ansible --version
+                '''
             }
         }
         
         stage('Install Terraform') {
             steps {
                 sh '''
-                    wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
-                    echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
-                    sudo apt-get update && sudo apt-get install -y terraform
+                    # Download and install Terraform directly without requiring sudo
+                    wget https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_amd64.zip
+                    unzip terraform_1.7.5_linux_amd64.zip
+                    mkdir -p $HOME/.local/bin
+                    mv terraform $HOME/.local/bin/
+                    export PATH=$HOME/.local/bin:$PATH
+                    terraform --version
                 '''
             }
         }
@@ -220,8 +229,11 @@ primary_region = "sjc"
         stage('Terraform Init and Plan') {
             steps {
                 dir('terraform') {
-                    sh 'terraform init'
-                    sh 'terraform plan -out=tfplan'
+                    sh '''
+                        export PATH=$HOME/.local/bin:$PATH
+                        terraform init
+                        terraform plan -out=tfplan
+                    '''
                 }
             }
         }
@@ -229,7 +241,10 @@ primary_region = "sjc"
         stage('Terraform Apply') {
             steps {
                 dir('terraform') {
-                    sh 'terraform apply -auto-approve tfplan'
+                    sh '''
+                        export PATH=$HOME/.local/bin:$PATH
+                        terraform apply -auto-approve tfplan
+                    '''
                 }
             }
         }
@@ -237,11 +252,10 @@ primary_region = "sjc"
         stage('Install flyctl') {
             steps {
                 sh '''
-                    curl -L https://fly.io/install.sh | sh
-                    echo 'export FLYCTL_INSTALL="/var/lib/jenkins/.fly"' >> ~/.bashrc
-                    echo 'export PATH="$FLYCTL_INSTALL/bin:$PATH"' >> ~/.bashrc
-                    export FLYCTL_INSTALL="/var/lib/jenkins/.fly"
+                    curl -L https://fly.io/install.sh | FLYCTL_INSTALL=$HOME/.fly sh
+                    export FLYCTL_INSTALL="$HOME/.fly"
                     export PATH="$FLYCTL_INSTALL/bin:$PATH"
+                    fly version
                 '''
             }
         }
@@ -249,10 +263,10 @@ primary_region = "sjc"
         stage('Deploy to Fly.io') {
             steps {
                 sh '''
-                    export FLYCTL_INSTALL="/var/lib/jenkins/.fly"
+                    export FLYCTL_INSTALL="$HOME/.fly"
                     export PATH="$FLYCTL_INSTALL/bin:$PATH"
-                    flyctl auth token $FLY_API_TOKEN
-                    flyctl deploy --app django-docker-app --image ahammedfaisal/django-docker-app:latest
+                    fly auth token $FLY_API_TOKEN
+                    fly deploy --app django-docker-app --image ahammedfaisal/django-docker-app:latest
                 '''
             }
         }
@@ -260,9 +274,9 @@ primary_region = "sjc"
         stage('Run Migrations') {
             steps {
                 sh '''
-                    export FLYCTL_INSTALL="/var/lib/jenkins/.fly"
+                    export FLYCTL_INSTALL="$HOME/.fly"
                     export PATH="$FLYCTL_INSTALL/bin:$PATH"
-                    flyctl ssh console --app django-docker-app -C "python manage.py migrate"
+                    fly ssh console --app django-docker-app -C "python manage.py migrate"
                 '''
             }
         }
@@ -270,9 +284,9 @@ primary_region = "sjc"
         stage('Create Superuser') {
             steps {
                 sh '''
-                    export FLYCTL_INSTALL="/var/lib/jenkins/.fly"
+                    export FLYCTL_INSTALL="$HOME/.fly"
                     export PATH="$FLYCTL_INSTALL/bin:$PATH"
-                    DJANGO_SUPERUSER_PASSWORD=$DJANGO_ADMIN_PASSWORD flyctl ssh console --app django-docker-app -C "python manage.py createsuperuser --noinput --username admin --email admin@example.com" || true
+                    DJANGO_SUPERUSER_PASSWORD=$DJANGO_ADMIN_PASSWORD fly ssh console --app django-docker-app -C "python manage.py createsuperuser --noinput --username admin --email admin@example.com" || true
                 '''
             }
         }
