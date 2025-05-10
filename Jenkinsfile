@@ -6,6 +6,8 @@ pipeline {
         DJANGO_SECRET_KEY = credentials('django-secret-key')
         DJANGO_ADMIN_PASSWORD = credentials('django-admin-password')
         PATH = "$HOME/.local/bin:$PATH"
+        LC_ALL = "C.UTF-8"
+        LANG = "C.UTF-8"
     }
 
     stages {
@@ -34,8 +36,17 @@ pipeline {
         stage('Install Ansible') {
             steps {
                 sh '''
+                    # Set UTF-8 locale
+                    export LC_ALL=C.UTF-8
+                    export LANG=C.UTF-8
+                    
+                    # Install ansible
                     pip install --user ansible
+                    
+                    # Update PATH
                     export PATH=$HOME/.local/bin:$PATH
+                    
+                    # Verify installation
                     ansible --version
                 '''
             }
