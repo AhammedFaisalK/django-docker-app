@@ -2,7 +2,6 @@ pipeline {
     agent any
 
     environment {
-        FLY_API_TOKEN = credentials('fly-api-token')
         DJANGO_SECRET_KEY = credentials('django-secret-key')
         DJANGO_ADMIN_PASSWORD = credentials('django-admin-password')
         PATH = "$HOME/.local/bin:$PATH"
@@ -11,7 +10,12 @@ pipeline {
         // Add a build version for better traceability
         BUILD_VERSION = "${env.BUILD_NUMBER}"
         DOCKER_IMAGE = "ahammedfaisal/django-docker-app"
-        APP_NAME = "django-docker-app"
+        // Local deployment container name
+        CONTAINER_NAME = "django-app-container"
+        // Local deployment port
+        APP_PORT = "8000"
+        // Host port to map to container
+        HOST_PORT = "8080"
     }
 
     options {
@@ -110,97 +114,40 @@ pipeline {
             }
         }
         
-        stage('Create fly.toml') {
+        stage('Create Local Data Volume') {
             steps {
-                echo "Creating fly.toml configuration..."
-                writeFile file: 'fly.toml', text: """
-app = "${env.APP_NAME}"
-primary_region = "sjc"
-
-[build]
-  image = "${DOCKER_IMAGE}:${BUILD_VERSION}"
-
-[env]
-  PORT = "8000"
-  DEBUG = "False"
-  SECRET_KEY = "${env.DJANGO_SECRET_KEY}"
-
-[http_service]
-  internal_port = 8000
-  force_https = true
-  auto_stop_machines = true
-  auto_start_machines = true
-  min_machines_running = 1
-  processes = ["app"]
-
-[[vm]]
-  cpu_kind = "shared"
-  cpus = 1
-  memory_mb = 1024
-
-[mounts]
-  source = "django_data"
-  destination = "/app/data"
-                """
-            }
-        }
-        
-        stage('Install flyctl') {
-            steps {
-                echo "Installing Fly.io CLI..."
+                echo "Creating local data volume..."
                 sh '''
-                    # Check if flyctl is already installed
-                    if [ -d "$HOME/.fly" ]; then
-                        echo "flyctl already installed, updating it"
-                    else
-                        curl -L https://fly.io/install.sh | FLYCTL_INSTALL=$HOME/.fly sh
-                    fi
-                    
-                    export FLYCTL_INSTALL="$HOME/.fly"
-                    export PATH="$FLYCTL_INSTALL/bin:$PATH"
-                    fly version
+                    # Create a Docker volume for persistent data
+                    docker volume create django_data || true
                 '''
             }
         }
         
-        stage('Create Volume (if needed)') {
+        stage('Stop Previous Container') {
             steps {
-                echo "Checking if volume exists and creating if needed..."
+                echo "Stopping previous container if exists..."
                 sh '''
-                    export FLYCTL_INSTALL="$HOME/.fly"
-                    export PATH="$FLYCTL_INSTALL/bin:$PATH"
-                    
-                    # Authenticate with Fly.io
-                    fly auth token $FLY_API_TOKEN
-                    
-                    # Check if the app exists (this will fail if app doesn't exist)
-                    if ! fly apps list | grep -q "${APP_NAME}"; then
-                        echo "Creating new Fly app ${APP_NAME}..."
-                        fly apps create "${APP_NAME}" --org personal
-                    else
-                        echo "App ${APP_NAME} already exists"
-                    fi
-                    
-                    # Check if volume exists
-                    if ! fly volumes list -a "${APP_NAME}" | grep -q "django_data"; then
-                        echo "Creating new volume django_data..."
-                        fly volumes create django_data --region sjc --size 1 -a "${APP_NAME}"
-                    else
-                        echo "Volume django_data already exists"
-                    fi
+                    # Stop and remove any existing container with the same name
+                    docker stop ${CONTAINER_NAME} || true
+                    docker rm ${CONTAINER_NAME} || true
                 '''
             }
         }
         
-        stage('Deploy to Fly.io') {
+        stage('Deploy Locally') {
             steps {
-                echo "Deploying application to Fly.io..."
+                echo "Deploying application locally..."
                 sh """
-                    export FLYCTL_INSTALL="$HOME/.fly"
-                    export PATH="$FLYCTL_INSTALL/bin:$PATH"
-                    
-                    # Deploy the application
-                    fly deploy --strategy immediate --app ${env.APP_NAME} --image ${DOCKER_IMAGE}:${BUILD_VERSION}
+                    # Run the Docker container with environment variables and port mapping
+                    docker run -d \\
+                        --name ${CONTAINER_NAME} \\
+                        -p ${HOST_PORT}:${APP_PORT} \\
+                        -v django_data:/app/data \\
+                        -e SECRET_KEY='${DJANGO_SECRET_KEY}' \\
+                        -e DEBUG='False' \\
+                        -e ALLOWED_HOSTS='localhost,127.0.0.1' \\
+                        ${DOCKER_IMAGE}:${BUILD_VERSION}
                 """
             }
         }
@@ -209,12 +156,8 @@ primary_region = "sjc"
             steps {
                 echo "Running Django migrations..."
                 sh """
-                    export FLYCTL_INSTALL="$HOME/.fly"
-                    export PATH="$FLYCTL_INSTALL/bin:$PATH"
-                    # Add a retry mechanism for migrations
-                    for i in {1..3}; do
-                        fly ssh console --app ${env.APP_NAME} -C "python manage.py migrate" && break || sleep 15
-                    done
+                    # Run migrations inside the container
+                    docker exec ${CONTAINER_NAME} python manage.py migrate
                 """
             }
         }
@@ -223,10 +166,9 @@ primary_region = "sjc"
             steps {
                 echo "Creating Django superuser..."
                 sh """
-                    export FLYCTL_INSTALL="$HOME/.fly"
-                    export PATH="$FLYCTL_INSTALL/bin:$PATH"
-                    # The || true ensures this step doesn't fail if the user already exists
-                    DJANGO_SUPERUSER_PASSWORD=\$DJANGO_ADMIN_PASSWORD fly ssh console --app ${env.APP_NAME} -C "python manage.py createsuperuser --noinput --username admin --email admin@example.com" || true
+                    # Create superuser inside the container, ignore error if user already exists
+                    docker exec -e DJANGO_SUPERUSER_PASSWORD='${DJANGO_ADMIN_PASSWORD}' ${CONTAINER_NAME} \\
+                        python manage.py createsuperuser --noinput --username admin --email admin@example.com || true
                 """
             }
         }
@@ -235,27 +177,93 @@ primary_region = "sjc"
             steps {
                 echo "Verifying deployment..."
                 sh """
-                    export FLYCTL_INSTALL="$HOME/.fly"
-                    export PATH="$FLYCTL_INSTALL/bin:$PATH"
-                    # Check if the application is responding
-                    fly status --app ${env.APP_NAME}
+                    # Wait for the application to start up
+                    sleep 5
                     
-                    # Wait for app to be ready (simple check)
+                    # Check if the container is running
+                    docker ps | grep ${CONTAINER_NAME}
+                    
+                    # Check if the application is responding
                     for i in {1..6}; do
-                        curl -fs --head https://${env.APP_NAME}.fly.dev && echo "App is responding!" && exit 0 || echo "Waiting for app to be ready..."
+                        curl -fs --head http://localhost:${HOST_PORT} && echo "App is responding!" && exit 0 || echo "Waiting for app to be ready..."
                         sleep 10
                     done
                     
                     # If we reach here, the verification failed
-                    echo "WARNING: Could not verify that the app is responding. Please check the deployment manually."
+                    echo "WARNING: Could not verify that the app is responding. Please check the logs."
+                    docker logs ${CONTAINER_NAME}
                 """
+            }
+        }
+        
+        stage('Create Terraform Local Test') {
+            steps {
+                echo "Creating a local Terraform test configuration..."
+                writeFile file: 'terraform/local.tf', text: '''
+terraform {
+  required_providers {
+    docker = {
+      source  = "kreuzwerker/docker"
+      version = "3.0.2"
+    }
+  }
+}
+
+provider "docker" {}
+
+resource "docker_image" "django_app" {
+  name = "ahammedfaisal/django-docker-app:latest"
+}
+
+resource "docker_volume" "django_data" {
+  name = "django_data_tf"
+}
+
+resource "docker_container" "django_app" {
+  name  = "django-app-terraform"
+  image = docker_image.django_app.image_id
+  
+  ports {
+    internal = 8000
+    external = 8081
+  }
+  
+  volumes {
+    volume_name    = docker_volume.django_data.name
+    container_path = "/app/data"
+  }
+  
+  env = [
+    "DEBUG=False",
+    "ALLOWED_HOSTS=localhost,127.0.0.1"
+  ]
+}
+
+output "container_id" {
+  value = docker_container.django_app.id
+}
+
+output "app_url" {
+  value = "http://localhost:8081"
+}
+                '''
+                
+                // Try using Terraform with Docker provider as a learning exercise
+                sh '''
+                    mkdir -p terraform
+                    cd terraform
+                    export PATH=$HOME/.local/bin:$PATH
+                    terraform init || echo "Terraform init failed, but continuing pipeline"
+                    terraform validate || echo "Terraform validation failed, but continuing pipeline"
+                    terraform plan -out=tfplan || echo "Terraform plan failed, but continuing pipeline"
+                '''
             }
         }
     }
     
     post {
         success {
-            echo "Pipeline completed successfully! Application has been deployed to https://${env.APP_NAME}.fly.dev"
+            echo "Pipeline completed successfully! Application has been deployed locally to http://localhost:${HOST_PORT}"
         }
         
         failure {
