@@ -78,20 +78,27 @@ pipeline {
             steps {
                 echo "Installing Terraform..."
                 sh '''
-                    # Check if terraform is already installed
-                    if [ -f "$HOME/.local/bin/terraform" ]; then
-                        echo "Terraform already installed, removing it first"
+                    # Check if terraform exists and is a directory
+                    if [ -d "$HOME/.local/bin/terraform" ]; then
+                        echo "Terraform is a directory, removing it first"
+                        rm -rf $HOME/.local/bin/terraform
+                    # Check if terraform exists as a file
+                    elif [ -f "$HOME/.local/bin/terraform" ]; then
+                        echo "Terraform file exists, removing it first"
                         rm -f $HOME/.local/bin/terraform
                     fi
                     
-                    # Download and install Terraform directly without requiring sudo
+                    # Create .local/bin directory if it doesn't exist
+                    mkdir -p $HOME/.local/bin
+                    
+                    # Download and install Terraform
                     wget -q https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_amd64.zip
                     
-                    # Use -o flag to overwrite without prompting
-                    unzip -o terraform_1.7.5_linux_amd64.zip
+                    # Unzip directly to the target location
+                    unzip -o terraform_1.7.5_linux_amd64.zip -d $HOME/.local/bin/
                     
-                    mkdir -p $HOME/.local/bin
-                    mv terraform $HOME/.local/bin/
+                    # Ensure it's executable
+                    chmod +x $HOME/.local/bin/terraform
                     
                     # Clean up zip file
                     rm terraform_1.7.5_linux_amd64.zip
